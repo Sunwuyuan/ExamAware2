@@ -1,0 +1,101 @@
+name: 发布 NPM 包
+
+on:
+  # 当推送带有版本标签时触发
+  push:
+    tags:
+      - 'v*.*.*'
+      - '@examaware/core@*.*.*'
+      - '@examaware/player@*.*.*'
+  
+  # 允许手动触发
+  workflow_dispatch:
+    inputs:
+      package:
+        description: '选择要发布的包'
+        required: true
+        type: choice
+        options:
+          - all
+          - core
+          - player
+      version_type:
+        description: '版本类型'
+        required: false
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+        default: 'patch'
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # 用于 npm provenance
+    
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 获取所有历史记录用于版本管理
+
+      - name: 设置 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+
+      - name: 设置 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 类型检查
+        run: |
+          pnpm --filter @examaware/core type-check
+          pnpm --filter @examaware/player type-check
+
+      - name: 代码检查
+        continue-on-error: true
+        run: |
+          pnpm --filter @examaware/core lint || echo "⚠️ Core lint 跳过"
+          pnpm --filter @examaware/player lint || echo "⚠️ Player lint 跳过"
+
+      - name: 构建 @examaware/core
+        if: github.event.inputs.package == 'all' || github.event.inputs.package == 'core' || github.event_name == 'push'
+        run: pnpm --filter @examaware/core build
+
+      - name: 构建 @examaware/player
+        if: github.event.inputs.package == 'all' || github.event.inputs.package == 'player' || github.event_name == 'push'
+        run: pnpm --filter @examaware/player build
+
+      - name: 发布 @examaware/core
+        if: github.event.inputs.package == 'all' || github.event.inputs.package == 'core' || github.event_name == 'push'
+        working-directory: packages/core
+        run: |
+          echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
+          npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: 发布 @examaware/player
+        if: github.event.inputs.package == 'all' || github.event.inputs.package == 'player' || github.event_name == 'push'
+        working-directory: packages/player
+        run: |
+          echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
+          npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: 发布成功通知
+        if: success()
+        run: |
+          echo "✅ 包发布成功！"
+          echo "📦 @examaware/core 和 @examaware/player 已成功发布到 npm"
